@@ -301,7 +301,7 @@ class AgentLoopManager:
         """Initialize agent loop manager.
 
         Args:
-            config (DictConfig): trainer config.
+            config (DictConfig): YAML config.
             worker_group (RayWorkerGroup): ActorRolloutRef worker group.
         """
         self.config = config
@@ -374,13 +374,11 @@ class AgentLoopManager:
         Returns:
             DataProto: Output batch.
         """
-        if self.config.actor_rollout_ref.rollout.free_cache_engine:
-            self.wake_up()
+        self.wake_up()
         chunkes = prompts.chunk(len(self.agent_loop_workers))
         outputs = ray.get([worker.generate_sequences.remote(chunk) for worker, chunk in zip(self.agent_loop_workers, chunkes)])
         output = DataProto.concat(outputs)
-        if self.config.actor_rollout_ref.rollout.free_cache_engine:
-            self.sleep()
+        self.sleep()
 
         # calculate performance metrics
         timing = {}
@@ -403,9 +401,9 @@ class AgentLoopManager:
         return output
 
     def wake_up(self):
-        """Wake up all rollout server instances."""
+        """Wake up all vllm instances."""
         ray.get([server.wake_up.remote() for server in self.async_llm_servers])
 
     def sleep(self):
-        """Sleep all rollout server instances."""
+        """Sleep all vllm instances."""
         ray.get([server.sleep.remote() for server in self.async_llm_servers])

@@ -54,7 +54,7 @@ def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype
         "hidden_dropout": getattr(hf_config, "hidden_dropout", 0.0),
         "kv_channels": getattr(hf_config, "head_dim", None),
         "layernorm_epsilon": hf_config.rms_norm_eps,
-        "add_bias_linear": True,
+        "add_bias_linear": False,
         # Activation and normalization
         "activation_func": F.silu,
         "normalization": "RMSNorm",
@@ -148,18 +148,19 @@ def hf_to_mcore_config_qwen2moe(hf_config: PretrainedConfig, dtype: torch.dtype,
         num_moe_experts=hf_config.num_experts,
         moe_shared_expert_intermediate_size=hf_config.shared_expert_intermediate_size,
         moe_aux_loss_coeff=hf_config.router_aux_loss_coef,
-        # moe_aux_loss_coeff=0.0,
         moe_router_load_balancing_type="none",  # turn off aux_loss as it hurts perf in RL
         moe_shared_expert_overlap=True,
         moe_grouped_gemm=True,
         moe_router_score_function="softmax",
+        moe_router_dtype="fp32", # let's try if the fp32 is more stable when ep is large
+        moe_permute_fusion=True, # need TE 2.1+
         # Other optimizations
         persist_layer_norm=True,
         bias_activation_fusion=True,
         bias_dropout_fusion=True,
         # Qwen specific
-        moe_router_pre_softmax=True,
-        add_qkv_bias=True,
+        moe_router_pre_softmax=not getattr(hf_config, 'norm_topk_prob', True),
+        add_qkv_bias=False, # hack for bailing only
     )
     # override_transformer_config_kwargs as kwargs shall never be none
     args.update(override_transformer_config_kwargs)
@@ -216,12 +217,14 @@ def hf_to_mcore_config_qwen3moe(hf_config: PretrainedConfig, dtype: torch.dtype,
         moe_router_load_balancing_type="none",  # turn off aux_loss as it hurts perf in RL
         moe_grouped_gemm=True,
         moe_router_score_function="softmax",
+        moe_router_dtype="fp32", # let's try if the fp32 is more stable when ep is large
+        moe_permute_fusion=True, # need TE 2.1+
         # Other optimizations
         persist_layer_norm=True,
         bias_activation_fusion=True,
         bias_dropout_fusion=True,
         # Qwen specific
-        moe_router_pre_softmax=False,
+        moe_router_pre_softmax=not getattr(hf_config, 'norm_topk_prob', True),
         qk_layernorm=True,
     )
     # override_transformer_config_kwargs as kwargs shall never be none

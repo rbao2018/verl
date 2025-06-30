@@ -194,13 +194,11 @@ class AsyncLLMServerManager:
 
     def wake_up(self):
         """Wake up all vllm instances."""
-        if self.config.rollout.free_cache_engine:
-            ray.get([server.wake_up.remote() for server in self.async_llm_servers])
+        ray.get([server.wake_up.remote() for server in self.async_llm_servers])
 
     def sleep(self):
         """Sleep all vllm instances."""
-        if self.config.rollout.free_cache_engine:
-            ray.get([server.sleep.remote() for server in self.async_llm_servers])
+        ray.get([server.sleep.remote() for server in self.async_llm_servers])
 
     def submit_chat_completions(
         self,

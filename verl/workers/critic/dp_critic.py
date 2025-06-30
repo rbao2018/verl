@@ -221,8 +221,6 @@ class DataParallelPPOCritic(BasePPOCritic):
                 self.critic_optimizer.zero_grad()
 
                 for data in micro_batches:
-                    micro_batch_metrics = {}
-
                     # Support all devices
                     if isinstance(data, DataProto):
                         data = {**data.batch.to(get_device_id()), **data.non_tensor_batch}
@@ -256,18 +254,16 @@ class DataParallelPPOCritic(BasePPOCritic):
 
                     loss.backward()
 
-                    micro_batch_metrics.update(
-                        {
-                            "critic/vf_loss": vf_loss.detach().item(),
-                            "critic/vf_clipfrac": vf_clipfrac.detach().item(),
-                            "critic/vpred_mean": masked_mean(vpreds, response_mask).detach().item(),
-                        }
-                    )
+                    data = {
+                        "critic/vf_loss": vf_loss.detach().item(),
+                        "critic/vf_clipfrac": vf_clipfrac.detach().item(),
+                        "critic/vpred_mean": masked_mean(vpreds, response_mask).detach().item(),
+                    }
 
-                    append_to_dict(metrics, micro_batch_metrics)
+                    append_to_dict(metrics, data)
 
                 grad_norm = self._optimizer_step()
-                mini_batch_metrics = {"critic/grad_norm": grad_norm.detach().item()}
-                append_to_dict(metrics, mini_batch_metrics)
+                data = {"critic/grad_norm": grad_norm.detach().item()}
+                append_to_dict(metrics, data)
         self.critic_optimizer.zero_grad()
         return metrics

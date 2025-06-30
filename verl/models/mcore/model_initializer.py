@@ -107,14 +107,14 @@ class Qwen2MoEModel(BaseModelInitializer):
 
         # Patch layer spec for shared experts
         for i in range(len(transformer_layer_spec.layer_specs)):
-            transformer_layer_spec.layer_specs[i].submodules.mlp.submodules.shared_experts.params["gate"] = True
+            transformer_layer_spec.layer_specs[i].submodules.mlp.submodules.shared_experts.params["gate"] = False
 
         return transformer_layer_spec
 
     def initialize(self, **kwargs):
         # Qwen default freeze_moe_router: true
         model = super().initialize(**kwargs)
-        freeze_moe_router = kwargs.get("freeze_moe_router", True)
+        freeze_moe_router = kwargs.get("freeze_moe_router", False)
         if freeze_moe_router:
             for layer in model.decoder.layers:
                 layer.mlp.router.weight.requires_grad = False
