@@ -19,12 +19,11 @@ This trainer supports model-agonistic model initialization with huggingface
 
 import uuid
 from collections import defaultdict
-from copy import deepcopy
 from pprint import pprint
 
 import numpy as np
 import torch
-from omegaconf import OmegaConf, open_dict
+from omegaconf import OmegaConf
 from tqdm import tqdm
 
 from verl import DataProto
@@ -327,7 +326,15 @@ class RayFasterDAPOTrainer(RayPPOTrainer):
                 is_last_step = self.global_steps >= self.total_training_steps
 
                 with marked_timer("step", timing_raw):
-                    # generate a batch
+                    # generate a batch with interleave is False to manual load balance the query
+                    gen_batch = gen_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=False)
+                    gen_batch.meta_info = {
+                        "eos_token_id": self.tokenizer.eos_token_id,
+                        "pad_token_id": self.tokenizer.pad_token_id,
+                        "recompute_log_prob": False,
+                        "do_sample": self.config.actor_rollout_ref.rollout.val_kwargs.do_sample,
+                        "validate": True,
+                    }
                     with marked_timer("gen", timing_raw, color="red"):
                         if not self.async_rollout_mode:
                             gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
@@ -335,6 +342,10 @@ class RayFasterDAPOTrainer(RayPPOTrainer):
                             gen_batch_output = self.async_rollout_manager.generate_sequences(gen_batch)
                         timing_raw.update(gen_batch_output.meta_info["timing"])
                         gen_batch_output.meta_info.pop("timing", None)
+
+                    # generate a batch with interleave is True to align with the following algorithm compute
+                    indices = torch.arange(len(gen_batch_output)).reshape(self.config.actor_rollout_ref.rollout.n, -1).T.reshape(-1)
+                    gen_batch_output.reorder(indices)
 
                     batch.non_tensor_batch["uid"] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))], dtype=object)
                     # repeat to align with repeated responses in rollout
