@@ -128,7 +128,7 @@ class AsyncLLMServerManager:
         *,
         prompt_ids: List[int],
         sampling_params: Dict[str, Any],
-        use_query_count_balancing: bool = True,  # 新增参数，是否使用查询数负载均衡
+        use_query_count_balancing: bool = False,  # 新增参数，是否使用查询数负载均衡
     ) -> List[int]:
         """
         Generate tokens from prompt ids.
@@ -271,7 +271,8 @@ class AgentLoopWorker:
             sampling_params["top_p"] = config.val_kwargs.top_p
             sampling_params["temperature"] = config.val_kwargs.temperature
 
-        assert batch.meta_info.get("validate", False) == True, "we must hack bailing generation for every single turn to balance the load"
+        assert batch.meta_info.get("validate", False) == True, "we must hack bailing generation for every single turn to balance the load!"
+        assert "reward_model" in batch.non_tensor_batch.keys(), "we must have reward model in bailing agent loop!"
         n = 1
         tasks = []
 
@@ -281,8 +282,14 @@ class AgentLoopWorker:
 
         agent_names = batch.non_tensor_batch["agent_name"].repeat(n, axis=0)
         raw_prompts = batch.non_tensor_batch["raw_prompt"].repeat(n, axis=0)
-        for agent_name, messages in zip(agent_names, raw_prompts):
-            tasks.append(asyncio.create_task(self._run_agent_loop(agent_name, messages.tolist(), sampling_params)))
+        labels = [rm.get("ground_truth", None) for rm in batch.non_tensor_batch["reward_model"].repeat(n, axis=0)]
+        # print(f"labels are:{labels} in line 286 bailing_agent_loop.py")
+
+        for agent_name, messages, label in zip(agent_names, raw_prompts, labels):
+            copy_sampling_params = sampling_params.copy()
+            copy_sampling_params.update({"label": label})
+            # print(f"copy_sampling_params are:{copy_sampling_params}", flush=True)
+            tasks.append(asyncio.create_task(self._run_agent_loop(agent_name, messages.tolist(), copy_sampling_params)))
         outputs = await asyncio.gather(*tasks)
 
         output = self._postprocess(outputs)
@@ -359,9 +366,18 @@ class AgentLoopWorker:
             batch_size=len(input_ids),
         )
 
-        num_turns = np.array([input.num_turns for input in inputs], dtype=np.int32)
+        non_tensor_batch = {
+            "__num_turns__": np.array([input.num_turns for input in inputs], dtype=np.int32),
+            "__final_reward__": np.array([input.metrics.final_reward for input in inputs], dtype=np.float32),
+            "__generative_reward__": np.array([input.metrics.generative_reward for input in inputs], dtype=np.float32),
+            "__math_verify_reward__": np.array([input.metrics.math_verify_reward for input in inputs], dtype=np.float32),
+            "__code_sandbox_reward__": np.array([input.metrics.code_sandbox_reward for input in inputs], dtype=np.float32),
+            "__ground_truth__": np.array([input.metrics.ground_truth for input in inputs], dtype=object),
+            "__prediction__": np.array([input.metrics.prediction for input in inputs], dtype=object),
+        }
+
         metrics = [input.metrics.model_dump() for input in inputs]
-        return DataProto(batch=batch, non_tensor_batch={"__num_turns__": num_turns}, meta_info={"metrics": metrics})
+        return DataProto(batch=batch, non_tensor_batch=non_tensor_batch, meta_info={"metrics": metrics})
 
 
 class AgentLoopManager:
@@ -468,6 +484,7 @@ class AgentLoopManager:
         timing["slowest/tool_calls"] = t_tool_calls[slowest]
 
         output.meta_info = {"timing": timing}
+        output.non_tensor_batch["reward_model"] = prompts.non_tensor_batch["reward_model"]
         return output
 
     def wake_up(self):

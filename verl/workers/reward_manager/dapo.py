@@ -54,6 +54,7 @@ class DAPORewardManager:
         valid_response_lengths = attention_mask[:, prompt_len:].sum(dim=-1)
 
         responses_strs, ground_truths, data_sources, extras = [], [], [], []
+        responses_ids = []
         
         start_time = time.time()  # 记录开始时间
         print("detokenizer start now!", flush=True)
@@ -62,6 +63,7 @@ class DAPORewardManager:
             data_item = data[i]
             valid_len = valid_response_lengths[i]
             valid_response_ids = response_ids[i][:valid_len]
+            responses_ids.append(valid_response_ids)
             response_str = self.tokenizer.decode(valid_response_ids, skip_special_tokens=True)
             responses_strs.append(response_str)
             # Get the ground truth and data source
@@ -80,38 +82,46 @@ class DAPORewardManager:
             extra_infos=extras
         )
 
-        return results, responses_strs, ground_truths, data_sources
+        return results, responses_ids, ground_truths, data_sources
 
     def __call__(self, data: DataProto, return_dict: bool = False):
         """We will expand this function gradually based on the available datasets"""
 
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
-        if "rm_scores" in data.batch.keys():
-            if return_dict:
-                return {"reward_tensor": data.batch["rm_scores"]}
-            else:
-                return data.batch["rm_scores"]
+        
+        # print(f"data.non_tensor_batch.keys() are :{data.non_tensor_batch.keys()}", flush=True)
 
         reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
         reward_extra_info = defaultdict(list)
-
         prompt_ids = data.batch["prompts"]
-        attention_mask = data.batch["attention_mask"]
-        
-        prompt_len = prompt_ids.shape[-1]
-        # Get the valid response lengths
-        valid_response_lengths = attention_mask[:, prompt_len:].sum(dim=-1)
+        valid_response_lengths = data.batch["attention_mask"][:, prompt_ids.shape[-1]:].sum(dim=-1)
 
-        results, responses_strs, ground_truths, data_sources = self.verify(data)
         already_print_data_sources = {}
 
+        if "__final_reward__" in data.non_tensor_batch.keys():
+            results, responses_ids, ground_truths, data_sources = [], [], [], []
+            for i in range(len(data)):
+                data_item = data[i]
+                # results.append(data_item.non_tensor_batch["__final_reward__"])
+                results.append(
+                    {
+                        "score": data_item.non_tensor_batch["__final_reward__"],
+                        "pred": data_item.non_tensor_batch["__prediction__"]
+                    }
+                )
+                responses_ids.append(data.batch["responses"][i][:valid_response_lengths[i]])
+                ground_truths.append(data_item.non_tensor_batch["__ground_truth__"])
+                data_sources.append(data_item.non_tensor_batch[self.reward_fn_key])
+        else:
+            results, responses_ids, ground_truths, data_sources = self.verify(data)
+        
         for i in range(len(data)):
             # Get the data for this instance
             valid_response_length = valid_response_lengths[i].item()
             # Get the result (dict or float) and the data source
             result, data_source = results[i], data_sources[i]
             # Get the response string, output string, and ground truth
-            response_str, ground_truth = responses_strs[i], ground_truths[i]
+            response_id, ground_truth = responses_ids[i], ground_truths[i]
 
             score: float
             if isinstance(result, dict):
@@ -123,7 +133,7 @@ class DAPORewardManager:
                 score = result
             
             overlong_reward = 0
-            reward = score 
+            reward = score
         
             if self.overlong_buffer_cfg.enable:
                 overlong_buffer_len = self.overlong_buffer_cfg.len
@@ -136,7 +146,7 @@ class DAPORewardManager:
                     reward_extra_info["overlong_reward"].append(overlong_reward)
                     reward_extra_info["overlong"].append(overlong_reward < 0)
 
-            reward_tensor[i, valid_response_length - 1] = reward
+            reward_tensor[i, valid_response_length - 1] = torch.tensor(reward, dtype=torch.float32)
 
             if data_source not in already_print_data_sources:
                 already_print_data_sources[data_source] = 0
@@ -146,16 +156,16 @@ class DAPORewardManager:
                 prompt_str = self.tokenizer.decode(prompt_ids[i], skip_special_tokens=True)
                 print("[data_source]", data_source, flush=True)
                 print("[prompt]", prompt_str, flush=True)
-                print("[response]", response_str, flush=True)
+                print("[response]", self.tokenizer.decode(response_id, skip_special_tokens=False), flush=True)
                 print("[ground_truth]", ground_truth, flush=True)
                 print("[valid_response_length]", valid_response_length, flush=True)
                 print("[overlong_reward]", overlong_reward, flush=True)
                 
                 if isinstance(result, dict):
                     for key, value in result.items():
-                        print(f"[{key}]", value)
+                        print(f"[{key}]", value, flush=True)
                 else:
-                    print("[score]", score)
+                    print("[score]", score, flush=True)
 
         if return_dict:
             return {

@@ -148,7 +148,7 @@ def verify_strict_box(pred: str, gt: str) -> tuple[int, Optional[str]]:
     boxed_pred = extract_boxed_content(pred)
 
     # remove the boxed content from the prediction
-    extracted_pred = remove_boxed(boxed_pred) if boxed_pred else None
+    extracted_pred = remove_boxed(boxed_pred) if boxed_pred else '[INVALID]'
 
     return (1 if extracted_pred == gt else -1), extracted_pred
 
@@ -201,10 +201,10 @@ def bailing_general_reward_func(prompt: str, response: str, label: str, strict_b
             math_metric_1 = request_api_wrapper({"predictions": pred, "answers": label}, url=f"http://{WORKER_0_POD_NAME}:11111/get_reward")
             if math_metric_1 > 0.5:
                 correct = True
-            else:
-                math_metric_2 = request_api_wrapper({"predictions": pred, "answers": label}, url=f"http://{WORKER_1_POD_NAME}:22222/get_reward")
-                if math_metric_2 > 0.5:
-                    correct = True
+            # else:
+            #     math_metric_2 = request_api_wrapper({"predictions": pred, "answers": label}, url=f"http://{WORKER_1_POD_NAME}:22222/get_reward")
+            #     if math_metric_2 > 0.5:
+            #         correct = True
 
     acc_reward = 1.0 if correct else 0.0
     reward = 0.9 * acc_reward + 0.1 * format_reward

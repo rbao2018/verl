@@ -20,6 +20,7 @@ This trainer supports model-agonistic model initialization with huggingface
 import uuid
 from collections import defaultdict
 from pprint import pprint
+import ray
 
 import numpy as np
 import torch
@@ -28,6 +29,8 @@ from tqdm import tqdm
 
 from verl import DataProto
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
+from verl.single_controller.ray import RayClassWithInitArgs, RayResourcePool, RayWorkerGroup
+from verl.single_controller.ray.base import create_colocated_worker_cls
 from verl.trainer.ppo.core_algos import agg_loss
 from verl.trainer.ppo.metric_utils import (
     compute_data_metrics,
@@ -36,14 +39,12 @@ from verl.trainer.ppo.metric_utils import (
     process_validation_metrics,
     reduce_metrics,
 )
-from verl.trainer.ppo.ray_trainer import AdvantageEstimator, RayPPOTrainer,apply_kl_penalty, compute_advantage, compute_response_mask
+from verl.trainer.ppo.ray_trainer import RayPPOTrainer,apply_kl_penalty, compute_advantage, compute_response_mask, Role
 from verl.trainer.ppo.reward import compute_reward, compute_reward_async
 from verl.utils.debug import marked_timer
 from verl.utils.checkpoint.checkpoint_manager import should_save_ckpt_esi
 
 class RayFasterDAPOTrainer(RayPPOTrainer):
-
-
     def _validate(self):
         data_source_lst = []
         reward_extra_infos_dict: dict[str, list] = defaultdict(list)
@@ -79,6 +80,8 @@ class RayFasterDAPOTrainer(RayPPOTrainer):
                 non_tensor_batch_keys_to_pop.append("tools_kwargs")
             if "interaction_kwargs" in test_batch.non_tensor_batch:
                 non_tensor_batch_keys_to_pop.append("interaction_kwargs")
+            if "reward_model" in test_batch.non_tensor_batch:
+                non_tensor_batch_keys_to_pop.append("reward_model")
             test_gen_batch = test_batch.pop(
                 batch_keys=batch_keys_to_pop,
                 non_tensor_batch_keys=non_tensor_batch_keys_to_pop,
@@ -318,6 +321,8 @@ class RayFasterDAPOTrainer(RayPPOTrainer):
                     non_tensor_batch_keys_to_pop.append("tools_kwargs")
                 if "interaction_kwargs" in batch.non_tensor_batch:
                     non_tensor_batch_keys_to_pop.append("interaction_kwargs")
+                if "reward_model" in batch.non_tensor_batch:
+                    non_tensor_batch_keys_to_pop.append("reward_model")
                 gen_batch = batch.pop(
                     batch_keys=batch_keys_to_pop,
                     non_tensor_batch_keys=non_tensor_batch_keys_to_pop,
@@ -342,6 +347,7 @@ class RayFasterDAPOTrainer(RayPPOTrainer):
                             gen_batch_output = self.async_rollout_manager.generate_sequences(gen_batch)
                         timing_raw.update(gen_batch_output.meta_info["timing"])
                         gen_batch_output.meta_info.pop("timing", None)
+                        # print(f"line 345 in faster dapo trainer.py {gen_batch_output.non_tensor_batch.keys()}", flush=True)
 
                     # generate a batch with interleave is True to align with the following algorithm compute
                     indices = torch.arange(len(gen_batch_output)).reshape(self.config.actor_rollout_ref.rollout.n, -1).T.reshape(-1)
