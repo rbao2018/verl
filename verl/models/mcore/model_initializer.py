@@ -107,14 +107,14 @@ class Qwen2MoEModel(BaseModelInitializer):
 
         # Patch layer spec for shared experts
         for i in range(len(transformer_layer_spec.layer_specs)):
-            transformer_layer_spec.layer_specs[i].submodules.mlp.submodules.shared_experts.params["gate"] = False
+            transformer_layer_spec.layer_specs[i].submodules.mlp.submodules.shared_experts.params["gate"] = True
 
         return transformer_layer_spec
 
     def initialize(self, **kwargs):
         # Qwen default freeze_moe_router: true
         model = super().initialize(**kwargs)
-        freeze_moe_router = kwargs.get("freeze_moe_router", False)
+        freeze_moe_router = kwargs.get("freeze_moe_router", True)
         if freeze_moe_router:
             for layer in model.decoder.layers:
                 layer.mlp.router.weight.requires_grad = False
@@ -253,3 +253,21 @@ class Qwen25VLModel(BaseModelInitializer):
             qwen25_vl_model.language_model.output_layer = LinearForLastLayer(input_size=tfconfig.hidden_size, output_size=1, config=tfconfig)
 
         return qwen25_vl_model
+
+
+class BailingMoEModel(BaseModelInitializer):
+    """Initializer for Qwen2 MoE models."""
+
+    def get_transformer_layer_spec(self):
+        assert self.tfconfig.normalization == "RMSNorm", "only RMSNorm is supported for now"
+        transformer_layer_spec = get_gpt_decoder_block_spec(self.tfconfig, use_transformer_engine=True)
+
+        return transformer_layer_spec
+
+    def initialize(self, **kwargs):
+        model = super().initialize(**kwargs)
+        freeze_moe_router = kwargs.get("freeze_moe_router", True)
+        if freeze_moe_router:
+            for layer in model.decoder.layers:
+                layer.mlp.router.weight.requires_grad = False
+        return model

@@ -16,7 +16,7 @@ from transformers import PretrainedConfig
 
 from verl.utils.device import get_torch_device
 
-VALID_CONFIG_TYPE = {"llama", "qwen2", "qwen2_vl", "qwen2_5_vl", "qwen2_moe", "qwen3", "qwen3_moe", "deepseek_v3", "minicpmv", "minicpmo"}
+VALID_CONFIG_TYPE = {"llama", "qwen2", "qwen2_vl", "qwen2_5_vl", "qwen3", "qwen3_moe", "deepseek_v3", "minicpmv", "minicpmo"}
 
 
 def get_device_flops(unit="T"):
@@ -41,8 +41,8 @@ def get_device_flops(unit="T"):
         flops = 312e12
     elif "L40" in device_name:
         flops = 181.05e12
-    elif "L20Y" in device_name:
-        flops = 989e12
+    elif "L20" in device_name:
+        flops = 119.5e12
     elif "H20" in device_name:
         flops = 148e12
     elif "910B" in device_name:

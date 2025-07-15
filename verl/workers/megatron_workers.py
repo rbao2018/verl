@@ -228,6 +228,21 @@ class ActorRolloutRefWorker(MegatronWorker, DistProfilerExtension):
             "qkv_layer_name": "self_attention.linear_qkv.",
             "gate_proj_layer_name": "linear_fc1.",
         }
+
+        self.actor_model_config.head_dim =  self.actor_model_config.hidden_size // self.actor_model_config.num_attention_heads
+        rollout_actor_model_config = self.actor_model_config
+        need_pad_model_config_path = False
+        if self.actor_model_config.num_attention_heads % self.config.rollout.tensor_model_parallel_size != 0:
+            import os
+            import json
+            from types import SimpleNamespace
+            need_pad_model_config_path = True
+            bailing_config = json.loads(open(os.path.join(f"{self.config.model.path}_pad", "config.json"), "r").read())
+            bailing_config = SimpleNamespace(**bailing_config)
+            rollout_actor_model_config.num_attention_heads = bailing_config.num_attention_heads
+            rollout_actor_model_config.num_key_value_heads = bailing_config.num_key_value_heads
+            rollout_actor_model_config.head_dim = self.actor_model_config.head_dim
+
         if self.config.rollout.name == "vllm":
             from torch.distributed.device_mesh import init_device_mesh
 
@@ -249,17 +264,17 @@ class ActorRolloutRefWorker(MegatronWorker, DistProfilerExtension):
                     actor_module=self.actor_module,
                     config=self.config.rollout,
                     tokenizer=self.tokenizer,
-                    model_hf_config=self.actor_model_config,
+                    model_hf_config=rollout_actor_model_config,
                 )
             elif vllm_mode == "spmd":
                 from verl.workers.rollout.vllm_rollout import vLLMAsyncRollout
 
                 vllm_rollout_cls = vLLMRollout if self.config.rollout.mode == "sync" else vLLMAsyncRollout
                 rollout = vllm_rollout_cls(
-                    model_path=local_path,
+                    model_path=f"{local_path}_pad" if need_pad_model_config_path else local_path,
                     config=self.config.rollout,
                     tokenizer=self.tokenizer,
-                    model_hf_config=self.actor_model_config,
+                    model_hf_config=rollout_actor_model_config,
                     device_mesh=rollout_device_mesh,
                     trust_remote_code=trust_remote_code,
                 )
@@ -268,10 +283,10 @@ class ActorRolloutRefWorker(MegatronWorker, DistProfilerExtension):
             # perform weight resharding between actor and rollout
             from verl.models.mcore import get_mcore_weight_converter
 
-            weight_converter = get_mcore_weight_converter(self.actor_model_config, self.dtype)
+            weight_converter = get_mcore_weight_converter(rollout_actor_model_config, self.dtype)
             sharding_manager = MegatronVLLMShardingManager(
                 inference_engine=rollout.inference_engine,
-                model_config=self.actor_model_config,
+                model_config=rollout_actor_model_config,
                 transformer_config=self.tf_config,
                 layer_name_mapping=layer_name_mapping,
                 actor_module=self.actor.actor_module,
@@ -305,10 +320,10 @@ class ActorRolloutRefWorker(MegatronWorker, DistProfilerExtension):
             local_path = copy_to_local(self.config.model.path)
             log_gpu_memory_usage(f"Before building {self.config.rollout.name} rollout", logger=None)
             rollout = SGLangRollout(
-                actor_module=local_path,
+                actor_module=f"{local_path}_pad" if need_pad_model_config_path else local_path,
                 config=self.config.rollout,
                 processing_class=self.processor if self.processor is not None else self.tokenizer,
-                model_hf_config=self.actor_model_config,
+                model_hf_config=rollout_actor_model_config,
                 trust_remote_code=trust_remote_code,
                 device_mesh=rollout_device_mesh,
             )
@@ -316,11 +331,11 @@ class ActorRolloutRefWorker(MegatronWorker, DistProfilerExtension):
 
             from verl.models.mcore import get_mcore_weight_converter
 
-            weight_converter = get_mcore_weight_converter(self.actor_model_config, self.dtype)
+            weight_converter = get_mcore_weight_converter(rollout_actor_model_config, self.dtype)
             sharding_manager = MegatronSGLangShardingManager(
                 actor_module=self.actor.actor_module,
                 inference_engine=rollout._engine,
-                model_config=self.actor_model_config,
+                model_config=rollout_actor_model_config,
                 transformer_config=self.tf_config,
                 layer_name_mapping=layer_name_mapping,
                 weight_converter=weight_converter,

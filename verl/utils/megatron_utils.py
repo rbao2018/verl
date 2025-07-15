@@ -650,6 +650,13 @@ def default_tp_concat_fn(layer_name_mapping, name, train_params, infer_params, m
     we can throw an error to force user disable TP HybridEngine.
     """
     from megatron.core import mpu
+    head_dim = model_config.head_dim
+    dest_num_attention_heads = model_config.num_attention_heads
+    dest_num_key_value_heads = model_config.num_key_value_heads
+    num_attention_heads = model_config.hidden_size // head_dim
+    num_key_value_heads = int(dest_num_key_value_heads / (dest_num_attention_heads / num_attention_heads))
+    padding_head_num = dest_num_attention_heads - num_attention_heads
+    padding_kv_head_num = dest_num_key_value_heads - num_key_value_heads
 
     train_tp_size = mpu.get_tensor_model_parallel_world_size()
     if layer_name_mapping.get("qkv_layer_name") in name and "layer_norm" not in name:
@@ -658,8 +665,6 @@ def default_tp_concat_fn(layer_name_mapping, name, train_params, infer_params, m
         q_lst = []
         k_lst = []
         v_lst = []
-        num_attention_heads = model_config.num_attention_heads
-        num_key_value_heads = model_config.num_key_value_heads
         if "vision_model" in name:
             num_attention_heads = hf_config.vision_config.num_heads
             num_key_value_heads = hf_config.vision_config.num_heads
@@ -683,7 +688,23 @@ def default_tp_concat_fn(layer_name_mapping, name, train_params, infer_params, m
         q = torch.cat(q_lst, dim=0)
         k = torch.cat(k_lst, dim=0)
         v = torch.cat(v_lst, dim=0)
-        infer_params = torch.cat((q, k, v), dim=0) if not convert_qkv_gate_up_by_simple_split else [q, k, v]
+
+        if padding_head_num > 0:
+            q = torch.nn.functional.pad(q, (0, 0, 0, padding_head_num * head_dim))
+        if padding_kv_head_num > 0:
+            k = torch.nn.functional.pad(k, (0, 0, 0, padding_kv_head_num * head_dim))
+            v = torch.nn.functional.pad(v, (0, 0, 0, padding_kv_head_num * head_dim))
+
+        if 'BailingMoeForCausalLM' in getattr(model_config, 'architectures'):
+            infer_params = torch.cat((q, k, v), dim=0)
+        else:
+            infer_params = torch.cat((q, k, v), dim=0) if not convert_qkv_gate_up_by_simple_split else [q, k, v]
+        
+    
+    elif "self_attention.linear_proj" in name:
+        infer_params = torch.cat(infer_params, dim=tp_utils.get_tensor_parallel_partition_dim(train_params))
+        if padding_head_num > 0:
+            infer_params = torch.nn.functional.pad(infer_params, (0, padding_head_num * head_dim))
 
     elif layer_name_mapping.get("gate_proj_layer_name") in name and "layer_norm" not in name and "vision_model.projection" not in name:
         # if the tensor is gate and proj
@@ -695,11 +716,14 @@ def default_tp_concat_fn(layer_name_mapping, name, train_params, infer_params, m
             up_lst.append(up)
         gate = torch.cat(gate_lst, dim=0)
         up = torch.cat(up_lst, dim=0)
-        infer_params = torch.cat((gate, up), dim=0) if not convert_qkv_gate_up_by_simple_split else [gate, up]
+        if 'BailingMoeForCausalLM' in getattr(model_config, 'architectures'):
+            infer_params = [gate, up]
+        else:
+            infer_params = torch.cat((gate, up), dim=0) if not convert_qkv_gate_up_by_simple_split else [gate, up]
 
     elif "mlp.experts.linear_fc2.weight" in name:  # moe
         infer_params = torch.cat(infer_params, dim=1)
-
+    
     else:
         # concat tensor
         infer_params = torch.cat(infer_params, dim=tp_utils.get_tensor_parallel_partition_dim(train_params))

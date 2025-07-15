@@ -12,20 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Copyright 2025 Ant Group. and/or its affiliates
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import os
 import re
 import gc
@@ -34,6 +20,7 @@ import requests
 
 from typing import Union, List, Optional, Dict
 from functools import partial
+from pebble import ProcessPool
 
 # Constants
 SUBSTITUTIONS = [
@@ -125,43 +112,7 @@ def normalize_final_answer(final_answer: str) -> str:
     final_answer = final_answer.replace("$", "")
     return final_answer.replace(",", "") if final_answer.replace(",", "").isdigit() else final_answer.strip()
 
-def verify_minerva(solution_str: str, gt: str, gt_need_extract: bool = False) -> tuple[bool, str]:
-    """Verify solution using Minerva criteria."""
-    match = re.findall(r"(?i)Answer\s*:\s*([^\n]+)", solution_str)
-    extracted_answer = match[-1] if match else "[INVALID]"
-    pred = normalize_final_answer(extracted_answer)
-
-    if gt_need_extract:
-        boxed_gt = extract_boxed_content(gt)
-        gt = normalize_final_answer(remove_boxed(boxed_gt)) if boxed_gt else gt
-    else:
-        gt = normalize_final_answer(gt)
-
-    return (pred == gt), pred
-
-def verify_strict_box(pred: str, gt: str) -> tuple[int, Optional[str]]:
-    """Verify prediction using strict box criteria."""
-    # get the last 300 tokens of the prediction
-    pred = pred[-300:]
-
-    # extract the boxed content from the prediction
-    boxed_pred = extract_boxed_content(pred)
-
-    # remove the boxed content from the prediction
-    extracted_pred = remove_boxed(boxed_pred) if boxed_pred else '[INVALID]'
-
-    return (1 if extracted_pred == gt else -1), extracted_pred
-
-def verify(solution_str: str, answer: str, strict_box_verify: bool = False) -> tuple[bool, str]:
-    """Verify if the solution is correct."""
-    if strict_box_verify:
-        correct, pred = verify_strict_box(solution_str, answer)
-        return correct == 1, pred
-
-    correct, pred = verify_minerva(solution_str, answer)
-    return correct, pred
-
-def request_api_wrapper(data: dict, url: str = "http://localhost:11111/get_reward", result_key: str = "reward", max_retries: int = 2) -> float:
+def request_api_wrapper(data: dict, url: str = "http://localhost:11111/get_reward", result_key: str = "reward", max_retries: int = 3) -> float:
     """Make API request with retry logic."""
     headers = {"Content-Type": "application/json"}
     
@@ -178,41 +129,59 @@ def request_api_wrapper(data: dict, url: str = "http://localhost:11111/get_rewar
             time.sleep(3)
     return -1.0
 
-def bailing_general_reward_func(prompt: str, response: str, label: str, strict_box_verify: bool = False) -> dict:
+def compute_single_score(solution_str: str, ground_truth: str, timeout_score: float = 0.0) -> float:
     """Compute the reward score for a single solution."""
-    format_reward = format_reward_function(response)
-    response = response[-300:]  # Limit solution length
+    # format_reward = format_reward_function(solution_str)
+    # solution_str = solution_str[-300:]  # Limit solution length
 
-    correct, pred = verify(response, label, strict_box_verify)
+    # boxed_pred = extract_boxed_content(solution_str)
+    # if not boxed_pred:
+    #     correct, pred = False, "[INVALID]"
+    # else:
+    #     pred = normalize_final_answer(remove_boxed(boxed_pred))
+    #     math_metric_1 = request_api_wrapper({"predictions": pred, "answers": ground_truth}, url=f"http://localhost:11111/get_reward")
+    #     if math_metric_1 > 0.5:
+    #         correct = True
 
-    if not correct:
-        boxed_pred = extract_boxed_content(response)
-        if not boxed_pred:
-            correct, pred = False, "[INVALID]"
-        else:
-            pred = normalize_final_answer(remove_boxed(boxed_pred))
-            POD_NAME = os.environ.get('POD_NAME', 'localhost')
-            if "master" in POD_NAME:
-                WORKER_POD_NAME = POD_NAME.replace("master", "worker")
-                WORKER_0_POD_NAME = WORKER_POD_NAME.rsplit("-", 1)[0] + "-0"
-                WORKER_1_POD_NAME = WORKER_POD_NAME.rsplit("-", 1)[0] + "-1"
-            else:
-                WORKER_0_POD_NAME, WORKER_1_POD_NAME = "localhost", "localhost"
-            math_metric_1 = request_api_wrapper({"predictions": pred, "answers": label}, url=f"http://{WORKER_0_POD_NAME}:11111/get_reward")
-            if math_metric_1 > 0.5:
-                correct = True
-            # else:
-            #     math_metric_2 = request_api_wrapper({"predictions": pred, "answers": label}, url=f"http://{WORKER_1_POD_NAME}:22222/get_reward")
-            #     if math_metric_2 > 0.5:
-            #         correct = True
+    math_metric_1 = request_api_wrapper({"predictions": solution_str, "answers": ground_truth}, url=f"http://localhost:11111/get_reward")
+    if math_metric_1 > 0.5:
+        correct = True
 
-    acc_reward = 1.0 if correct else 0.0
-    reward = 0.9 * acc_reward + 0.1 * format_reward
+    acc_reward = 1.0 if correct else timeout_score
 
-    return {
-        "final_reward": reward,
-        "math_verify_reward": acc_reward,
-        "generative_reward": format_reward,
-        "ground_truth": label,
-        "prediction": pred,
-    }
+    return acc_reward
+
+def process_task(args: tuple, timeout_score: float = 0) -> float:
+    """Process a single task with solution and ground truth."""
+    try:
+        solution, ground_truth = args
+        return compute_single_score(solution, ground_truth, timeout_score)
+    except Exception as e:
+        return timeout_score
+
+def compute_score(solution_strs: Union[str, List[str]], ground_truths: Union[str, List[str]], timeout_score=0) -> Union[float, List[float]]:
+    """Compute reward scores for solutions using parallel processing."""
+
+    # Handle single task case
+    if isinstance(solution_strs, str) and isinstance(ground_truths, str):
+        result = process_task((solution_strs, ground_truths), timeout_score)
+        return result
+
+    # Handle multiple tasks case
+    if not isinstance(solution_strs, list) or not isinstance(ground_truths, list):
+        raise ValueError("Both solution_strs and ground_truths must be either strings or lists")
+    
+    if len(solution_strs) != len(ground_truths):
+        raise ValueError("solution_strs and ground_truths must have equal length")
+
+    tasks = list(zip(solution_strs, ground_truths))
+    results = []
+
+    with ProcessPool(max_workers=min(128, os.cpu_count() - 32)) as pool:
+        process_func = partial(process_task, timeout_score=timeout_score)
+
+        futures = [pool.schedule(process_func, args=(task,)) for task in tasks]
+        results = [future.result() for future in futures]
+
+    return results
+
