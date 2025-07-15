@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-import re
+import json
 import gc
 import time
 import requests
@@ -22,166 +22,60 @@ from typing import Union, List, Optional, Dict
 from functools import partial
 from pebble import ProcessPool
 
-# Constants
-SUBSTITUTIONS = [
-    ("an ", ""), ("a ", ""), (".$", "$"), ("\\$", ""),
-    (r"\ ", ""), (" ", ""), ("mbox", "text"),
-    (",\\text{and}", ","), ("\\text{and}", ","),
-    ("\\text{m}", "\\text{}"),
-]
 
-REMOVED_EXPRESSIONS = [
-    "square", "ways", "integers", "dollars", "mph", "inches", "hours",
-    "km", "units", "\\ldots", "sue", "points", "feet", "minutes",
-    "digits", "cents", "degrees", "cm", "gm", "pounds", "meters",
-    "meals", "edges", "students", "childrentickets", "multiples",
-    "\\text{s}", "\\text{.}", "\\text{\ns}", "\\text{}^2",
-    "\\text{}^3", "\\text{\n}", "\\text{}", r"\mathrm{th}",
-    r"^\circ", r"^{\circ}", r"\;", r",\!", "{,}", '"', "\\dots",
-]
+def get_verifier_reward(example, max_retries: int = 3) -> float:
+    pred = example['pred']
+    label = json.loads(example['label'])
 
-def format_reward_function(predict_str: str) -> float:
-    """
-    Validate whether the input string strictly matches the required format:
-    <think> ... </think> ... <answer> ... boxed{} ... </answer>
-    
-    Args:
-        predict_str (str): The input string to validate.
-    
-    Returns:
-        float: 1.0 if the input string matches the format, otherwise -1.0.
-    """
-    # Define the strict pattern
-    pattern = re.compile(
-        r'^<think>.*?</think>.*?<answer>.*?boxed\{.*?\}.*?</answer>$',
-        re.DOTALL
-    )
-    
-    # Check if the input string matches the pattern
-    match_result = re.fullmatch(pattern, predict_str)
-    return 1.0 if match_result else -1.0
+    request_data = {
+        "verifier": label.get("verifier", None),
+        "pred": pred,
+        "gold": label.get("gold", None),
+        "template_answer": label.get("template_answer", None)
+    }
 
+    data = {
+        "invokeSource": "antopt",
+        "staffNo": "377381",
+        "async": False,
+        "modelName": "rule_base_instruct_follow",
+        "requestData": request_data,
+        "apiId": "QywxxoZDoDddxahzetLG"
+    }
 
-def extract_boxed_content(string: str) -> Optional[str]:
-    """Extract the last LaTeX boxed expression from a string."""
-    idx = string.rfind("boxed{")
-    if idx < 0:
-        return None
-
-    open_braces = 0
-    for i, char in enumerate(string[idx:], idx):
-        if char == '{':
-            open_braces += 1
-        elif char == '}':
-            open_braces -= 1
-            if open_braces == 0:
-                return string[idx:i + 1]
-    return None
-
-def remove_boxed(s: str) -> str:
-    """Remove the LaTeX boxed command from a string."""
-    prefix = "boxed{"
-    if not s.startswith(prefix) or not s.endswith("}"):
-        raise ValueError(f"Invalid boxed format: {s}")
-    return s[len(prefix):-1]
-
-def normalize_final_answer(final_answer: str) -> str:
-    """Normalize a final answer to a quantitative reasoning question."""
-    final_answer = final_answer.split("=")[-1]
-
-    # Apply substitutions and removals
-    for before, after in SUBSTITUTIONS:
-        final_answer = final_answer.replace(before, after)
-    for expr in REMOVED_EXPRESSIONS:
-        final_answer = final_answer.replace(expr, "")
-
-    # Normalize LaTeX expressions
-    patterns = [
-        (r"(.*?)(\$)(.*?)(\$)(.*)", "$\\3$"),
-        (r"(\\text\{)(.*?)(\})", "\\2"),
-        (r"(\\textbf\{)(.*?)(\})", "\\2"),
-        (r"(\\overline\{)(.*?)(\})", "\\2"),
-        (r"(\\boxed\{)(.*)(\})", "\\2"),
-        (r"(frac)([^{])(.)", "frac{\\2}{\\3}"),
-        (r"(sqrt)([^{])", "sqrt{\\2}")
-    ]
-    
-    for pattern, replacement in patterns:
-        final_answer = re.sub(pattern, replacement, final_answer)
-
-    final_answer = final_answer.replace("$", "")
-    return final_answer.replace(",", "") if final_answer.replace(",", "").isdigit() else final_answer.strip()
-
-def request_api_wrapper(data: dict, url: str = "http://localhost:11111/get_reward", result_key: str = "reward", max_retries: int = 3) -> float:
-    """Make API request with retry logic."""
+    url = "https://antoptplatform.alipay.com/api/v1/ds/service"
     headers = {"Content-Type": "application/json"}
-    
+
     for _ in range(max_retries):
         try:
-            response = requests.post(url=url, json=data, headers=headers, timeout=10)
-            response.raise_for_status()
-            result = response.json()
-            if result_key not in result:
-                raise KeyError(f"{result_key} not in response")
-            return result[result_key]
+            response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
+            is_correct = response.json()['data']['rule_reward_result']['pass']
+            reward = 1.0 if is_correct else 0.0
+            return reward
         except Exception as e:
-            print(f"API request error: {e}")
-            time.sleep(3)
-    return -1.0
+            print(f"Request failed: {e}")
+            time.sleep(1)
 
-def compute_single_score(solution_str: str, ground_truth: str, timeout_score: float = 0.0) -> float:
-    """Compute the reward score for a single solution."""
-    # format_reward = format_reward_function(solution_str)
-    # solution_str = solution_str[-300:]  # Limit solution length
+    return 0.0
 
-    # boxed_pred = extract_boxed_content(solution_str)
-    # if not boxed_pred:
-    #     correct, pred = False, "[INVALID]"
-    # else:
-    #     pred = normalize_final_answer(remove_boxed(boxed_pred))
-    #     math_metric_1 = request_api_wrapper({"predictions": pred, "answers": ground_truth}, url=f"http://localhost:11111/get_reward")
-    #     if math_metric_1 > 0.5:
-    #         correct = True
 
-    math_metric_1 = request_api_wrapper({"predictions": solution_str, "answers": ground_truth}, url=f"http://localhost:11111/get_reward")
-    if math_metric_1 > 0.5:
-        correct = True
+def compute_score(solution_str: str, ground_truth: str, extra_info: Optional[Dict] = None) -> float:
+    """Compute the score for a given solution based on the bailing verifier.
 
-    acc_reward = 1.0 if correct else timeout_score
+    Args:
+        solution_str (str): The solution string to be evaluated.
+        ground_truth (str): The ground truth answer for comparison.
+        extra_info (dict, optional): Additional information that might be needed for scoring. Defaults to None.
 
-    return acc_reward
+    Returns:
+        float: The computed score as a floating point number.
+    """
+    if extra_info is None:
+        extra_info = {}
 
-def process_task(args: tuple, timeout_score: float = 0) -> float:
-    """Process a single task with solution and ground truth."""
-    try:
-        solution, ground_truth = args
-        return compute_single_score(solution, ground_truth, timeout_score)
-    except Exception as e:
-        return timeout_score
+    example = {
+        'pred': solution_str,
+        'label': json.loads(ground_truth)
+    }
 
-def compute_score(solution_strs: Union[str, List[str]], ground_truths: Union[str, List[str]], timeout_score=0) -> Union[float, List[float]]:
-    """Compute reward scores for solutions using parallel processing."""
-
-    # Handle single task case
-    if isinstance(solution_strs, str) and isinstance(ground_truths, str):
-        result = process_task((solution_strs, ground_truths), timeout_score)
-        return result
-
-    # Handle multiple tasks case
-    if not isinstance(solution_strs, list) or not isinstance(ground_truths, list):
-        raise ValueError("Both solution_strs and ground_truths must be either strings or lists")
-    
-    if len(solution_strs) != len(ground_truths):
-        raise ValueError("solution_strs and ground_truths must have equal length")
-
-    tasks = list(zip(solution_strs, ground_truths))
-    results = []
-
-    with ProcessPool(max_workers=min(128, os.cpu_count() - 32)) as pool:
-        process_func = partial(process_task, timeout_score=timeout_score)
-
-        futures = [pool.schedule(process_func, args=(task,)) for task in tasks]
-        results = [future.result() for future in futures]
-
-    return results
-
+    return get_verifier_reward(example)
