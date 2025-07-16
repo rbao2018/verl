@@ -215,15 +215,8 @@ from typing import Union, List, Dict
 
 from verl.utils.import_utils import deprecated
 
-def process_single_item(
-    data_source, 
-    solution_str, 
-    ground_truth, 
-    extra_info,
-    sandbox_fusion_url,
-    concurrent_semaphore,
-    memory_limit_mb
-):
+def process_single_item(args):
+    (data_source, solution_str, ground_truth, extra_info, sandbox_fusion_url, concurrent_semaphore, memory_limit_mb) = args
     if data_source == "openai/gsm8k":
         from . import gsm8k
         return gsm8k.compute_score(solution_str, ground_truth)
