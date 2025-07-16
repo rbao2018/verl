@@ -289,17 +289,14 @@ def default_compute_score(
     max_workers = min(max(os.cpu_count() - 32, 1), 128)
 
     with ProcessPool(max_workers=max_workers) as pool:
-        # Prepare the partial function with fixed arguments
-        process_item = partial(process_single_item, 
-                               sandbox_fusion_url=sandbox_fusion_url,
-                               concurrent_semaphore=concurrent_semaphore,
-                               memory_limit_mb=memory_limit_mb)
-
         # Prepare the tasks
-        tasks = zip(data_sources, solution_strs, ground_truths, extra_infos)
+        tasks = [
+            (data_source, solution_str, ground_truth, extra_info, sandbox_fusion_url, concurrent_semaphore, memory_limit_mb)
+            for data_source, solution_str, ground_truth, extra_info in zip(data_sources, solution_strs, ground_truths, extra_infos)
+        ]
 
-        # Use pool.map with the partial function
-        future = pool.map(process_item, tasks)
+        # Use pool.map with the process_single_item function directly
+        future = pool.map(process_single_item, tasks)
         iterator = future.result()
 
         results = []
@@ -326,7 +323,6 @@ def default_compute_score(
     else:
         return results
 
-    
 @deprecated("verl.utils.reward_score.default_compute_score")
 def _default_compute_score(data_source, solution_str, ground_truth, extra_info=None, sandbox_fusion_url=None, concurrent_semaphore=None, memory_limit_mb=None):
     """
