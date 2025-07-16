@@ -215,8 +215,15 @@ from typing import Union, List, Dict
 
 from verl.utils.import_utils import deprecated
 
-def process_single_item(args):
-    (data_source, solution_str, ground_truth, extra_info, sandbox_fusion_url, concurrent_semaphore, memory_limit_mb) = args
+def process_single_item(
+    data_source, 
+    solution_str, 
+    ground_truth, 
+    extra_info,
+    sandbox_fusion_url,
+    concurrent_semaphore,
+    memory_limit_mb
+):
     if data_source == "openai/gsm8k":
         from . import gsm8k
         return gsm8k.compute_score(solution_str, ground_truth)
@@ -279,21 +286,24 @@ def default_compute_score(
         extra_infos = [None] * len(data_sources)
 
     # Calculate maximum number of worker processes
-    max_workers = min(max(os.cpu_count() - 32, 1), 128)
+    max_workers = min(max(os.cpu_count() - 2, 1), 128)  # Adjusted CPU usage
 
+    # Prepare arguments for each task
+    task_args = [
+        (data_source, solution_str, ground_truth, extra_info, sandbox_fusion_url, concurrent_semaphore, memory_limit_mb)
+        for data_source, solution_str, ground_truth, extra_info in zip(data_sources, solution_strs, ground_truths, extra_infos)
+    ]
+
+    results = []
     with ProcessPool(max_workers=max_workers) as pool:
-        # Prepare the tasks
-        tasks = [
-            (data_source, solution_str, ground_truth, extra_info, sandbox_fusion_url, concurrent_semaphore, memory_limit_mb)
-            for data_source, solution_str, ground_truth, extra_info in zip(data_sources, solution_strs, ground_truths, extra_infos)
-        ]
-
-        # Use pool.map with the process_single_item function directly
-        future = pool.map(process_single_item, tasks)
+        # Use partial to bind the function with fixed arguments
+        partial_func = partial(process_single_item)
+        
+        # Submit tasks and handle results
+        future = pool.map(partial_func, *zip(*task_args), timeout=30)  # Added timeout parameter
         iterator = future.result()
-
-        results = []
-        while True:
+        
+        for i, task_arg in enumerate(task_args):
             try:
                 result = next(iterator)
                 # Process result format
@@ -303,12 +313,16 @@ def default_compute_score(
                     results.append(float(result))
                 else:
                     results.append(float(result[0]))
-            except StopIteration:
-                break
             except TimeoutError as error:
-                print(f"Function timed out after {error.args[1]} seconds")
+                print(f"Task {i} timed out after {error.args[1]} seconds: {task_arg[0]}")
+                results.append({"error": "timeout", "details": str(error)})
+            except NotImplementedError as error:
+                print(f"Task {i} failed: {error}")
+                results.append({"error": "not_implemented", "details": str(error)})
             except Exception as error:
-                print(f"Function raised an error: {error}")
+                print(f"Task {i} raised an unexpected error: {error}")
+                traceback.print_exc()  # Print full traceback
+                results.append({"error": "unexpected", "details": str(error)})
 
     # Handle return value for single input
     if single_input:
