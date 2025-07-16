@@ -24,9 +24,8 @@ from pebble import ProcessPool
 
 
 def get_verifier_reward(example, max_retries: int = 3) -> float:
-    pred = example['pred']
-    label = json.loads(example['label'])
-
+    pred, label = example['pred'], example['label']
+    
     request_data = {
         "verifier": label.get("verifier", None),
         "pred": pred,
