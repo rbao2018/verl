@@ -14,12 +14,12 @@
 # limitations under the License.
 # from . import gsm8k, math, prime_math, prime_code
 
-import os
-from pebble import ProcessPool
-from concurrent.futures import TimeoutError
-from typing import Union, List, Dict
+# import os
+# from pebble import ProcessPool
+# from concurrent.futures import TimeoutError
+# from typing import Union, List, Dict
 
-from verl.utils.import_utils import deprecated
+# from verl.utils.import_utils import deprecated
 
 
 # def default_compute_score(data_source, solution_str, ground_truth, extra_info=None, sandbox_fusion_url=None, concurrent_semaphore=None, memory_limit_mb=None):
@@ -206,16 +206,23 @@ from verl.utils.import_utils import deprecated
 #     else:
 #         return results
 
+import os
+import traceback
+from functools import partial
+from pebble import ProcessPool
+from concurrent.futures import TimeoutError
+from typing import Union, List, Dict
 
-# 步骤1：将 process_single_item 改为顶层函数，并接收外部参数
+from verl.utils.import_utils import deprecated
+
 def process_single_item(
     data_source, 
     solution_str, 
     ground_truth, 
     extra_info,
-    sandbox_fusion_url,  # 新增：从外部传递的参数
-    concurrent_semaphore,  # 新增：从外部传递的参数
-    memory_limit_mb  # 新增：从外部传递的参数
+    sandbox_fusion_url,
+    concurrent_semaphore,
+    memory_limit_mb
 ):
     if data_source == "openai/gsm8k":
         from . import gsm8k
@@ -230,7 +237,7 @@ def process_single_item(
         from . import prime_math
         return prime_math.compute_score(solution_str, ground_truth)
     elif data_source in ["codecontests", "apps", "codeforces", "taco"]:
-        if sandbox_fusion_url:  # 现在使用传递进来的参数
+        if sandbox_fusion_url:
             from . import sandbox_fusion
             return sandbox_fusion.compute_score(
                 sandbox_fusion_url, 
@@ -255,7 +262,6 @@ def process_single_item(
     else:
         raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
 
-
 def default_compute_score(
     data_sources: Union[str, List[str]],
     solution_strs: Union[str, List[str]],
@@ -266,7 +272,7 @@ def default_compute_score(
     memory_limit_mb: int = None
 ) -> Union[float, Dict, List[Union[float, Dict]]]:
     """Compute scores for given solutions based on the data sources using parallel processing."""
-    # 转换单输入为列表
+    # Convert single input to list
     if isinstance(data_sources, str):
         data_sources = [data_sources]
         solution_strs = [solution_strs]
@@ -279,33 +285,28 @@ def default_compute_score(
     if extra_infos is None:
         extra_infos = [None] * len(data_sources)
 
-    # 计算最大工作进程数
+    # Calculate maximum number of worker processes
     max_workers = min(max(os.cpu_count() - 32, 1), 128)
 
     with ProcessPool(max_workers=max_workers) as pool:
-        # 构造参数列表：将外部参数（如 sandbox_fusion_url）与每个任务绑定
-        # 使用 zip 打包所有参数，确保每个任务对应一组参数
-        tasks = zip(
-            data_sources, 
-            solution_strs, 
-            ground_truths, 
-            extra_infos,
-            [sandbox_fusion_url] * len(data_sources),  # 每个任务都传递相同的 sandbox_fusion_url
-            [concurrent_semaphore] * len(data_sources),
-            [memory_limit_mb] * len(data_sources)
-        )
-        # 用 pool.map 执行任务，注意参数顺序要与 process_single_item 一致
-        future = pool.map(
-            lambda args: process_single_item(*args),  # 用 lambda 解包参数
-            tasks
-        )
+        # Prepare the partial function with fixed arguments
+        process_item = partial(process_single_item, 
+                               sandbox_fusion_url=sandbox_fusion_url,
+                               concurrent_semaphore=concurrent_semaphore,
+                               memory_limit_mb=memory_limit_mb)
+
+        # Prepare the tasks
+        tasks = zip(data_sources, solution_strs, ground_truths, extra_infos)
+
+        # Use pool.map with the partial function
+        future = pool.map(process_item, tasks)
         iterator = future.result()
 
         results = []
         while True:
             try:
                 result = next(iterator)
-                # 处理结果格式
+                # Process result format
                 if isinstance(result, dict):
                     results.append(result)
                 elif isinstance(result, (int, float, bool)):
@@ -319,11 +320,12 @@ def default_compute_score(
             except Exception as error:
                 print(f"Function raised an error: {error}")
 
-    # 处理单输入的返回值
+    # Handle return value for single input
     if single_input:
         return results[0] if results else None
     else:
         return results
+
     
 @deprecated("verl.utils.reward_score.default_compute_score")
 def _default_compute_score(data_source, solution_str, ground_truth, extra_info=None, sandbox_fusion_url=None, concurrent_semaphore=None, memory_limit_mb=None):
