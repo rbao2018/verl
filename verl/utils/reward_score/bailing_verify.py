@@ -24,12 +24,12 @@ from pebble import ProcessPool
 
 
 def get_verifier_rewards(examples):
-    responses = [example['response'] for example in examples]
+    preds = [example['pred'] for example in examples]
     labels = [example['label'] for example in examples]
 
     request_data = {
         "verifier": [label.get("verifier", None) for label in labels],
-        "pred": responses,
+        "pred": preds,
         "gold": [label.get("gold", None) for label in labels],
         "template_answer": [label.get("template_answer", "") for label in labels]
     }
