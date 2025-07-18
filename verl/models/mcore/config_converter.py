@@ -344,6 +344,7 @@ def hf_to_mcore_config_bailing_moe(hf_config: PretrainedConfig, dtype: torch.dty
         moe_shared_expert_overlap=True,
         moe_grouped_gemm=True,
         moe_router_score_function="softmax",
+        moe_router_dtype="fp32",
         # Other optimizations
         persist_layer_norm=True,
         bias_activation_fusion=True,
