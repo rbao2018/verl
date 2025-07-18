@@ -20,8 +20,6 @@ from typing import Union, List, Dict
 
 from verl.utils.import_utils import deprecated
 
-
-
 def default_compute_score(data_sources: Union[str, List[str]],
                           solution_strs: Union[str, List[str]],
                           ground_truths: Union[str, List[str]],
@@ -45,15 +43,13 @@ def default_compute_score(data_sources: Union[str, List[str]],
         NotImplementedError: If the reward function is not implemented for the given data source.
     """
 
-    if isinstance(data_sources, list):
-        data_source = data_sources[0]
-    else:
+    if isinstance(data_sources, str):
         data_source = data_sources
-        assert isinstance(data_sources, str), "data_sources must be a string or a list of strings"
+    else:
+        data_source = data_sources[0]
 
-    if data_sources == "openai/gsm8k":
+    if data_source == "openai/gsm8k":
         from . import gsm8k
-
         res = gsm8k.compute_score(solution_strs, ground_truths)
     elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval"]:
         # from . import math
