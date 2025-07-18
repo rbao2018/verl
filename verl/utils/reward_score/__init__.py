@@ -19,14 +19,23 @@ from concurrent.futures import TimeoutError
 from typing import Union, List, Dict
 
 from verl.utils.import_utils import deprecated
-def default_compute_score(data_source, solution_str, ground_truth, extra_info=None, sandbox_fusion_url=None, concurrent_semaphore=None, memory_limit_mb=None):
+
+
+
+def default_compute_score(data_sources: Union[str, List[str]],
+                          solution_strs: Union[str, List[str]],
+                          ground_truths: Union[str, List[str]],
+                          extra_infos: Union[Dict, List[Dict]] = None,
+                          sandbox_fusion_url: str = None,
+                          concurrent_semaphore: int = None,
+                          memory_limit_mb: int = None) -> Union[float, Dict, List]:
     """Compute the score for a given solution based on the data source.
 
     Args:
-        data_source (str): The source dataset identifier which determines the scoring method.
-        solution_str (str): The solution string to be evaluated.
-        ground_truth (str): The ground truth answer for comparison.
-        extra_info (dict, optional): Additional information that might be needed for scoring. Defaults to None.
+        data_sources (str): The source dataset identifier which determines the scoring method.
+        solution_strs (str): The solution string to be evaluated.
+        ground_truths (str): The ground truth answer for comparison.
+        extra_infos (dict, optional): Additional information that might be needed for scoring. Defaults to None.
 
     Returns:
         float: The computed score as a floating point number. If the result is a dictionary,
@@ -36,15 +45,16 @@ def default_compute_score(data_source, solution_str, ground_truth, extra_info=No
         NotImplementedError: If the reward function is not implemented for the given data source.
     """
 
-    if isinstance(data_source, list):
-        data_source = data_source[0]
+    if isinstance(data_sources, list):
+        data_source = data_sources[0]
     else:
-        assert isinstance(data_source, str), "data_source must be a string or a list of strings"
+        data_source = data_sources
+        assert isinstance(data_sources, str), "data_sources must be a string or a list of strings"
 
-    if data_source == "openai/gsm8k":
+    if data_sources == "openai/gsm8k":
         from . import gsm8k
 
-        res = gsm8k.compute_score(solution_str, ground_truth)
+        res = gsm8k.compute_score(solution_strs, ground_truths)
     elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval"]:
         # from . import math
 
@@ -55,11 +65,11 @@ def default_compute_score(data_source, solution_str, ground_truth, extra_info=No
         # To use it, override the `compute_score` function with the following implementation:
 
         from . import math_verify
-        res = math_verify.compute_score(solution_str, ground_truth)
+        res = math_verify.compute_score(solution_strs, ground_truths)
     elif data_source == "math_dapo" or data_source.startswith("aime"):
         from . import math_dapo
 
-        res = math_dapo.compute_score(solution_str, ground_truth)
+        res = math_dapo.compute_score(solution_strs, ground_truths)
     elif data_source in [
         "numina_aops_forum",
         "numina_synthetic_math",
@@ -70,33 +80,33 @@ def default_compute_score(data_source, solution_str, ground_truth, extra_info=No
     ]:
         from . import prime_math
 
-        res = prime_math.compute_score(solution_str, ground_truth)
+        res = prime_math.compute_score(solution_strs, ground_truths)
     elif data_source in ["codecontests", "apps", "codeforces", "taco"]:
         # Use the passed sandbox_fusion_url if available
         if sandbox_fusion_url:
             from . import sandbox_fusion
 
             # Pass the URL directly, ground_truth likely contains test cases here
-            res = sandbox_fusion.compute_score(sandbox_fusion_url, concurrent_semaphore, memory_limit_mb, solution_str, ground_truth, continuous=True)
+            res = sandbox_fusion.compute_score(sandbox_fusion_url, concurrent_semaphore, memory_limit_mb, solution_strs, ground_truths, continuous=True)
         else:
             # If no sandbox URL is provided, fall back to prime_code or raise error
             from . import prime_code
 
             # Assuming prime_code doesn't need the URL
-            res = prime_code.compute_score(solution_str, ground_truth, continuous=True)
+            res = prime_code.compute_score(solution_strs, ground_truths, continuous=True)
     elif data_source in ["hiyouga/geometry3k"]:
         from . import geo3k
 
-        res = geo3k.compute_score(solution_str, ground_truth)
+        res = geo3k.compute_score(solution_strs, ground_truths)
     elif data_source in ["searchR1_nq", "searchR1_triviaqa", "searchR1_popqa", "searchR1_hotpotqa", "searchR1_2wikimultihopqa", "searchR1_musique", "searchR1_bamboogle"]:
         from . import search_r1_like_qa_em
 
-        res = search_r1_like_qa_em.compute_score(solution_str, ground_truth)
+        res = search_r1_like_qa_em.compute_score(solution_strs, ground_truths)
 
     elif data_source in ["bailing_verify"]:
         from . import bailing_verify
-        res = bailing_verify.compute_score(solution_str, ground_truth)
-        
+        res = bailing_verify.compute_score(solution_strs, ground_truths)
+
     else:
         raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
 
