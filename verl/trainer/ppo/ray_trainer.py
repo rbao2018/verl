@@ -978,6 +978,14 @@ class RayPPOTrainer:
 
                 with marked_timer("step", timing_raw):
                     # generate a batch
+                    gen_batch = gen_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=False)
+                    gen_batch.meta_info = {
+                        "eos_token_id": self.tokenizer.eos_token_id,
+                        "pad_token_id": self.tokenizer.pad_token_id,
+                        "recompute_log_prob": False,
+                        "do_sample": True,
+                        "validate": True,
+                    }
                     with marked_timer("gen", timing_raw, color="red"):
                         if not self.async_rollout_mode:
                             gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
@@ -987,6 +995,10 @@ class RayPPOTrainer:
                             self.async_rollout_manager.sleep()
                         timing_raw.update(gen_batch_output.meta_info["timing"])
                         gen_batch_output.meta_info.pop("timing", None)
+                        
+                        # generate a batch with interleave is True to align with the following algorithm compute
+                        indices = torch.arange(len(gen_batch_output)).reshape(self.config.actor_rollout_ref.rollout.n, -1).T.reshape(-1)
+                        gen_batch_output.reorder(indices)
 
                     if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                         with marked_timer("gen_max", timing_raw, color="purple"):
