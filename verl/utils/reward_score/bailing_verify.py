@@ -27,10 +27,10 @@ def get_verifier_reward(example, max_retries: int = 3) -> float:
     pred, label = example['pred'], example['label']
     
     request_data = {
-        "verifier": label.get("verifier", None),
-        "pred": pred,
-        "gold": label.get("gold", None),
-        "template_answer": label.get("template_answer", None)
+        "verifier": [label.get("verifier", None)],
+        "pred": [pred],
+        "gold": [label.get("gold", None)],
+        "template_answer": [label.get("template_answer", "")]
     }
 
     data = {
@@ -48,7 +48,7 @@ def get_verifier_reward(example, max_retries: int = 3) -> float:
     for _ in range(max_retries):
         try:
             response = requests.post(url, headers=headers, data=json.dumps(data), timeout=10)
-            is_correct = response.json()['data']['rule_reward_result']['pass']
+            is_correct = response.json()['data']['reward_score'][0]["pass"]
             reward = 1.0 if is_correct else 0.0
             return reward
         except Exception as e:

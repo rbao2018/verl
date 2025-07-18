@@ -286,7 +286,7 @@ def default_compute_score(
         extra_infos = [None] * len(data_sources)
 
     # Calculate maximum number of worker processes
-    max_workers = min(max(os.cpu_count() - 2, 1), 128)  # Adjusted CPU usage
+    max_workers = min(max(os.cpu_count() - 32, 1), 128)  # Adjusted CPU usage
 
     # Prepare arguments for each task
     task_args = [
