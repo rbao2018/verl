@@ -12,97 +12,157 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# from . import gsm8k, math, prime_math, prime_code
+
+import os
+from pebble import ProcessPool
+from concurrent.futures import TimeoutError
+from typing import Union, List, Dict
+
+from verl.utils.import_utils import deprecated
+def default_compute_score(data_source, solution_str, ground_truth, extra_info=None, sandbox_fusion_url=None, concurrent_semaphore=None, memory_limit_mb=None):
+    """Compute the score for a given solution based on the data source.
+
+    Args:
+        data_source (str): The source dataset identifier which determines the scoring method.
+        solution_str (str): The solution string to be evaluated.
+        ground_truth (str): The ground truth answer for comparison.
+        extra_info (dict, optional): Additional information that might be needed for scoring. Defaults to None.
+
+    Returns:
+        float: The computed score as a floating point number. If the result is a dictionary,
+               it returns the dictionary instead.
+
+    Raises:
+        NotImplementedError: If the reward function is not implemented for the given data source.
+    """
+
+    if isinstance(data_source, list):
+        data_source = data_source[0]
+    else:
+        assert isinstance(data_source, str), "data_source must be a string or a list of strings"
+
+    if data_source == "openai/gsm8k":
+        from . import gsm8k
+
+        res = gsm8k.compute_score(solution_str, ground_truth)
+    elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval"]:
+        # from . import math
+
+        # res = math.compute_score(solution_str, ground_truth)
+        # [Optional] Math-Verify Integration
+        # For enhanced accuracy, consider utilizing Math-Verify (https://github.com/huggingface/Math-Verify).
+        # Note: Math-Verify needs to be manually installed via pip: `pip install math-verify`.
+        # To use it, override the `compute_score` function with the following implementation:
+
+        from . import math_verify
+        res = math_verify.compute_score(solution_str, ground_truth)
+    elif data_source == "math_dapo" or data_source.startswith("aime"):
+        from . import math_dapo
+
+        res = math_dapo.compute_score(solution_str, ground_truth)
+    elif data_source in [
+        "numina_aops_forum",
+        "numina_synthetic_math",
+        "numina_amc_aime",
+        "numina_synthetic_amc",
+        "numina_cn_k12",
+        "numina_olympiads",
+    ]:
+        from . import prime_math
+
+        res = prime_math.compute_score(solution_str, ground_truth)
+    elif data_source in ["codecontests", "apps", "codeforces", "taco"]:
+        # Use the passed sandbox_fusion_url if available
+        if sandbox_fusion_url:
+            from . import sandbox_fusion
+
+            # Pass the URL directly, ground_truth likely contains test cases here
+            res = sandbox_fusion.compute_score(sandbox_fusion_url, concurrent_semaphore, memory_limit_mb, solution_str, ground_truth, continuous=True)
+        else:
+            # If no sandbox URL is provided, fall back to prime_code or raise error
+            from . import prime_code
+
+            # Assuming prime_code doesn't need the URL
+            res = prime_code.compute_score(solution_str, ground_truth, continuous=True)
+    elif data_source in ["hiyouga/geometry3k"]:
+        from . import geo3k
+
+        res = geo3k.compute_score(solution_str, ground_truth)
+    elif data_source in ["searchR1_nq", "searchR1_triviaqa", "searchR1_popqa", "searchR1_hotpotqa", "searchR1_2wikimultihopqa", "searchR1_musique", "searchR1_bamboogle"]:
+        from . import search_r1_like_qa_em
+
+        res = search_r1_like_qa_em.compute_score(solution_str, ground_truth)
+
+    elif data_source in ["bailing_verify"]:
+        from . import bailing_verify
+        res = bailing_verify.compute_score(solution_str, ground_truth)
+        
+    else:
+        raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
+
+    if isinstance(res, list):
+        return res
+    elif isinstance(res, (int, float, bool)):
+        return float(res)
+    else:
+        return float(res[0])
+
 
 # import os
+# import traceback
+# from functools import partial
 # from pebble import ProcessPool
 # from concurrent.futures import TimeoutError
 # from typing import Union, List, Dict
 
 # from verl.utils.import_utils import deprecated
 
-
-# def default_compute_score(data_source, solution_str, ground_truth, extra_info=None, sandbox_fusion_url=None, concurrent_semaphore=None, memory_limit_mb=None):
-#     """Compute the score for a given solution based on the data source.
-
-#     Args:
-#         data_source (str): The source dataset identifier which determines the scoring method.
-#         solution_str (str): The solution string to be evaluated.
-#         ground_truth (str): The ground truth answer for comparison.
-#         extra_info (dict, optional): Additional information that might be needed for scoring. Defaults to None.
-
-#     Returns:
-#         float: The computed score as a floating point number. If the result is a dictionary,
-#                it returns the dictionary instead.
-
-#     Raises:
-#         NotImplementedError: If the reward function is not implemented for the given data source.
-#     """
+# def process_single_item(
+#     data_source, 
+#     solution_str, 
+#     ground_truth, 
+#     extra_info,
+#     sandbox_fusion_url,
+#     concurrent_semaphore,
+#     memory_limit_mb
+# ):
 #     if data_source == "openai/gsm8k":
 #         from . import gsm8k
-
-#         res = gsm8k.compute_score(solution_str, ground_truth)
+#         return gsm8k.compute_score(solution_str, ground_truth)
 #     elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval"]:
-#         # from . import math
-
-#         # res = math.compute_score(solution_str, ground_truth)
-#         # [Optional] Math-Verify Integration
-#         # For enhanced accuracy, consider utilizing Math-Verify (https://github.com/huggingface/Math-Verify).
-#         # Note: Math-Verify needs to be manually installed via pip: `pip install math-verify`.
-#         # To use it, override the `compute_score` function with the following implementation:
-
 #         from . import math_verify
-#         res = math_verify.compute_score(solution_str, ground_truth)
+#         return math_verify.compute_score(solution_str, ground_truth)
 #     elif data_source == "math_dapo" or data_source.startswith("aime"):
 #         from . import math_dapo
-
-#         res = math_dapo.compute_score(solution_str, ground_truth)
-#     elif data_source in [
-#         "numina_aops_forum",
-#         "numina_synthetic_math",
-#         "numina_amc_aime",
-#         "numina_synthetic_amc",
-#         "numina_cn_k12",
-#         "numina_olympiads",
-#     ]:
+#         return math_dapo.compute_score(solution_str, ground_truth)
+#     elif data_source in ["numina_aops_forum", "numina_synthetic_math", "numina_amc_aime", "numina_synthetic_amc", "numina_cn_k12", "numina_olympiads"]:
 #         from . import prime_math
-
-#         res = prime_math.compute_score(solution_str, ground_truth)
+#         return prime_math.compute_score(solution_str, ground_truth)
 #     elif data_source in ["codecontests", "apps", "codeforces", "taco"]:
-#         # Use the passed sandbox_fusion_url if available
 #         if sandbox_fusion_url:
 #             from . import sandbox_fusion
-
-#             # Pass the URL directly, ground_truth likely contains test cases here
-#             res = sandbox_fusion.compute_score(sandbox_fusion_url, concurrent_semaphore, memory_limit_mb, solution_str, ground_truth, continuous=True)
+#             return sandbox_fusion.compute_score(
+#                 sandbox_fusion_url, 
+#                 concurrent_semaphore, 
+#                 memory_limit_mb, 
+#                 solution_str, 
+#                 ground_truth, 
+#                 continuous=True
+#             )
 #         else:
-#             # If no sandbox URL is provided, fall back to prime_code or raise error
 #             from . import prime_code
-
-#             # Assuming prime_code doesn't need the URL
-#             res = prime_code.compute_score(solution_str, ground_truth, continuous=True)
+#             return prime_code.compute_score(solution_str, ground_truth, continuous=True)
 #     elif data_source in ["hiyouga/geometry3k"]:
 #         from . import geo3k
-
-#         res = geo3k.compute_score(solution_str, ground_truth)
+#         return geo3k.compute_score(solution_str, ground_truth)
 #     elif data_source in ["searchR1_nq", "searchR1_triviaqa", "searchR1_popqa", "searchR1_hotpotqa", "searchR1_2wikimultihopqa", "searchR1_musique", "searchR1_bamboogle"]:
 #         from . import search_r1_like_qa_em
-
-#         res = search_r1_like_qa_em.compute_score(solution_str, ground_truth)
-
+#         return search_r1_like_qa_em.compute_score(solution_str, ground_truth)
 #     elif data_source in ["bailing_verify"]:
 #         from . import bailing_verify
-#         res = bailing_verify.compute_score(solution_str, ground_truth)
-        
+#         return bailing_verify.compute_score(solution_str, ground_truth)
 #     else:
 #         raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
-
-#     if isinstance(res, dict):
-#         return res
-#     elif isinstance(res, (int, float, bool)):
-#         return float(res)
-#     else:
-#         return float(res[0])
 
 # def default_compute_score(
 #     data_sources: Union[str, List[str]],
@@ -113,24 +173,8 @@
 #     concurrent_semaphore: int = None,
 #     memory_limit_mb: int = None
 # ) -> Union[float, Dict, List[Union[float, Dict]]]:
-#     """Compute scores for given solutions based on the data sources using parallel processing.
-
-#     Args:
-#         data_sources: Source dataset identifier(s).
-#         solution_strs: Solution string(s) to be evaluated.
-#         ground_truths: Ground truth answer(s) for comparison.
-#         extra_infos: Additional information dict(s). Defaults to None.
-#         sandbox_fusion_url: URL for sandbox fusion. Defaults to None.
-#         concurrent_semaphore: Semaphore for concurrent processing. Defaults to None.
-#         memory_limit_mb: Memory limit in MB. Defaults to None.
-
-#     Returns:
-#         Computed score(s) or dictionary(ies).
-
-#     Raises:
-#         NotImplementedError: If the reward function is not implemented for a given data source.
-#     """
-#     # Convert single inputs to lists if necessary
+#     """Compute scores for given solutions based on the data sources using parallel processing."""
+#     # Convert single input to list
 #     if isinstance(data_sources, str):
 #         data_sources = [data_sources]
 #         solution_strs = [solution_strs]
@@ -143,192 +187,50 @@
 #     if extra_infos is None:
 #         extra_infos = [None] * len(data_sources)
 
-#     def process_single_item(data_source, solution_str, ground_truth, extra_info):
-#         if data_source == "openai/gsm8k":
-#             from . import gsm8k
-#             return gsm8k.compute_score(solution_str, ground_truth)
-#         elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval"]:
-#             from . import math_verify
-#             return math_verify.compute_score(solution_str, ground_truth)
-#         elif data_source == "math_dapo" or data_source.startswith("aime"):
-#             from . import math_dapo
-#             return math_dapo.compute_score(solution_str, ground_truth)
-#         elif data_source in ["numina_aops_forum", "numina_synthetic_math", "numina_amc_aime", "numina_synthetic_amc", "numina_cn_k12", "numina_olympiads"]:
-#             from . import prime_math
-#             return prime_math.compute_score(solution_str, ground_truth)
-#         elif data_source in ["codecontests", "apps", "codeforces", "taco"]:
-#             if sandbox_fusion_url:
-#                 from . import sandbox_fusion
-#                 return sandbox_fusion.compute_score(sandbox_fusion_url, concurrent_semaphore, memory_limit_mb, solution_str, ground_truth, continuous=True)
-#             else:
-#                 from . import prime_code
-#                 return prime_code.compute_score(solution_str, ground_truth, continuous=True)
-#         elif data_source in ["hiyouga/geometry3k"]:
-#             from . import geo3k
-#             return geo3k.compute_score(solution_str, ground_truth)
-#         elif data_source in ["searchR1_nq", "searchR1_triviaqa", "searchR1_popqa", "searchR1_hotpotqa", "searchR1_2wikimultihopqa", "searchR1_musique", "searchR1_bamboogle"]:
-#             from . import search_r1_like_qa_em
-#             return search_r1_like_qa_em.compute_score(solution_str, ground_truth)
-#         elif data_source in ["bailing_verify"]:
-#             from . import bailing_verify
-#             return bailing_verify.compute_score(solution_str, ground_truth)
-#         else:
-#             raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
+#     # Calculate maximum number of worker processes
+#     max_workers = min(max(os.cpu_count() - 32, 1), 128)  # Adjusted CPU usage
 
-#     # Calculate the number of max workers
-#     max_workers = min(max(os.cpu_count() - 32, 1), 128)
+#     # Prepare arguments for each task
+#     task_args = [
+#         (data_source, solution_str, ground_truth, extra_info, sandbox_fusion_url, concurrent_semaphore, memory_limit_mb)
+#         for data_source, solution_str, ground_truth, extra_info in zip(data_sources, solution_strs, ground_truths, extra_infos)
+#     ]
 
+#     results = []
 #     with ProcessPool(max_workers=max_workers) as pool:
-#         future = pool.map(process_single_item, data_sources, solution_strs, ground_truths, extra_infos)
+#         # Use partial to bind the function with fixed arguments
+#         partial_func = partial(process_single_item)
+        
+#         # Submit tasks and handle results
+#         future = pool.map(partial_func, *zip(*task_args), timeout=30)  # Added timeout parameter
 #         iterator = future.result()
-
-#         results = []
-#         while True:
+        
+#         for i, task_arg in enumerate(task_args):
 #             try:
 #                 result = next(iterator)
+#                 # Process result format
 #                 if isinstance(result, dict):
 #                     results.append(result)
 #                 elif isinstance(result, (int, float, bool)):
 #                     results.append(float(result))
 #                 else:
 #                     results.append(float(result[0]))
-#             except StopIteration:
-#                 break
 #             except TimeoutError as error:
-#                 print("Function took longer than %d seconds" % error.args[1])
+#                 print(f"Task {i} timed out after {error.args[1]} seconds: {task_arg[0]}")
+#                 results.append({"error": "timeout", "details": str(error)})
+#             except NotImplementedError as error:
+#                 print(f"Task {i} failed: {error}")
+#                 results.append({"error": "not_implemented", "details": str(error)})
 #             except Exception as error:
-#                 print("Function raised %s" % error)
-#                 # print(error.traceback)  # Python's traceback of remote process
+#                 print(f"Task {i} raised an unexpected error: {error}")
+#                 traceback.print_exc()  # Print full traceback
+#                 results.append({"error": "unexpected", "details": str(error)})
 
-#     # If input was a single item, return a single result
+#     # Handle return value for single input
 #     if single_input:
 #         return results[0] if results else None
 #     else:
 #         return results
-
-import os
-import traceback
-from functools import partial
-from pebble import ProcessPool
-from concurrent.futures import TimeoutError
-from typing import Union, List, Dict
-
-from verl.utils.import_utils import deprecated
-
-def process_single_item(
-    data_source, 
-    solution_str, 
-    ground_truth, 
-    extra_info,
-    sandbox_fusion_url,
-    concurrent_semaphore,
-    memory_limit_mb
-):
-    if data_source == "openai/gsm8k":
-        from . import gsm8k
-        return gsm8k.compute_score(solution_str, ground_truth)
-    elif data_source in ["lighteval/MATH", "DigitalLearningGmbH/MATH-lighteval"]:
-        from . import math_verify
-        return math_verify.compute_score(solution_str, ground_truth)
-    elif data_source == "math_dapo" or data_source.startswith("aime"):
-        from . import math_dapo
-        return math_dapo.compute_score(solution_str, ground_truth)
-    elif data_source in ["numina_aops_forum", "numina_synthetic_math", "numina_amc_aime", "numina_synthetic_amc", "numina_cn_k12", "numina_olympiads"]:
-        from . import prime_math
-        return prime_math.compute_score(solution_str, ground_truth)
-    elif data_source in ["codecontests", "apps", "codeforces", "taco"]:
-        if sandbox_fusion_url:
-            from . import sandbox_fusion
-            return sandbox_fusion.compute_score(
-                sandbox_fusion_url, 
-                concurrent_semaphore, 
-                memory_limit_mb, 
-                solution_str, 
-                ground_truth, 
-                continuous=True
-            )
-        else:
-            from . import prime_code
-            return prime_code.compute_score(solution_str, ground_truth, continuous=True)
-    elif data_source in ["hiyouga/geometry3k"]:
-        from . import geo3k
-        return geo3k.compute_score(solution_str, ground_truth)
-    elif data_source in ["searchR1_nq", "searchR1_triviaqa", "searchR1_popqa", "searchR1_hotpotqa", "searchR1_2wikimultihopqa", "searchR1_musique", "searchR1_bamboogle"]:
-        from . import search_r1_like_qa_em
-        return search_r1_like_qa_em.compute_score(solution_str, ground_truth)
-    elif data_source in ["bailing_verify"]:
-        from . import bailing_verify
-        return bailing_verify.compute_score(solution_str, ground_truth)
-    else:
-        raise NotImplementedError(f"Reward function is not implemented for {data_source=}")
-
-def default_compute_score(
-    data_sources: Union[str, List[str]],
-    solution_strs: Union[str, List[str]],
-    ground_truths: Union[str, List[str]],
-    extra_infos: Union[Dict, List[Dict]] = None,
-    sandbox_fusion_url: str = None,
-    concurrent_semaphore: int = None,
-    memory_limit_mb: int = None
-) -> Union[float, Dict, List[Union[float, Dict]]]:
-    """Compute scores for given solutions based on the data sources using parallel processing."""
-    # Convert single input to list
-    if isinstance(data_sources, str):
-        data_sources = [data_sources]
-        solution_strs = [solution_strs]
-        ground_truths = [ground_truths]
-        extra_infos = [extra_infos] if extra_infos is not None else [None]
-        single_input = True
-    else:
-        single_input = False
-
-    if extra_infos is None:
-        extra_infos = [None] * len(data_sources)
-
-    # Calculate maximum number of worker processes
-    max_workers = min(max(os.cpu_count() - 32, 1), 128)  # Adjusted CPU usage
-
-    # Prepare arguments for each task
-    task_args = [
-        (data_source, solution_str, ground_truth, extra_info, sandbox_fusion_url, concurrent_semaphore, memory_limit_mb)
-        for data_source, solution_str, ground_truth, extra_info in zip(data_sources, solution_strs, ground_truths, extra_infos)
-    ]
-
-    results = []
-    with ProcessPool(max_workers=max_workers) as pool:
-        # Use partial to bind the function with fixed arguments
-        partial_func = partial(process_single_item)
-        
-        # Submit tasks and handle results
-        future = pool.map(partial_func, *zip(*task_args), timeout=30)  # Added timeout parameter
-        iterator = future.result()
-        
-        for i, task_arg in enumerate(task_args):
-            try:
-                result = next(iterator)
-                # Process result format
-                if isinstance(result, dict):
-                    results.append(result)
-                elif isinstance(result, (int, float, bool)):
-                    results.append(float(result))
-                else:
-                    results.append(float(result[0]))
-            except TimeoutError as error:
-                print(f"Task {i} timed out after {error.args[1]} seconds: {task_arg[0]}")
-                results.append({"error": "timeout", "details": str(error)})
-            except NotImplementedError as error:
-                print(f"Task {i} failed: {error}")
-                results.append({"error": "not_implemented", "details": str(error)})
-            except Exception as error:
-                print(f"Task {i} raised an unexpected error: {error}")
-                traceback.print_exc()  # Print full traceback
-                results.append({"error": "unexpected", "details": str(error)})
-
-    # Handle return value for single input
-    if single_input:
-        return results[0] if results else None
-    else:
-        return results
 
 @deprecated("verl.utils.reward_score.default_compute_score")
 def _default_compute_score(data_source, solution_str, ground_truth, extra_info=None, sandbox_fusion_url=None, concurrent_semaphore=None, memory_limit_mb=None):
