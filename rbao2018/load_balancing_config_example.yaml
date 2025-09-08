@@ -1,0 +1,45 @@
+# Example configuration for AsyncLLMServerManager load balancing
+
+# Load balancing strategy options:
+# - 'requests': Original least requests load balancing (default)
+# - 'sessions': New least active sessions load balancing
+
+# For requests-based load balancing (default behavior)
+load_balancing_strategy: "requests"
+
+# For session-based load balancing
+# load_balancing_strategy: "sessions"
+# session_timeout: 300  # Session timeout in seconds (default: 300 = 5 minutes)
+
+# Example usage in your config:
+actor_rollout_ref:
+  rollout:
+    agent:
+      # Use requests-based load balancing (original behavior)
+      load_balancing_strategy: "requests"
+      
+      # OR use session-based load balancing
+      # load_balancing_strategy: "sessions"
+      # session_timeout: 600  # 10 minutes timeout
+      
+      # Other agent configuration...
+      num_workers: 4
+      agent_loop_config_path: null
+
+# The load balancing strategy affects:
+# 1. How servers are selected for new requests
+# 2. What metrics are tracked and reported
+# 3. Whether session cleanup is performed
+# 4. Whether end_session parameter in generate() method is honored
+
+# Requests-based strategy:
+# - Tracks total request count per server
+# - Selects server with least total requests
+# - Simpler, lower overhead
+# - Good for stateless workloads
+
+# Sessions-based strategy:
+# - Tracks active sessions per server
+# - Selects server with least active sessions
+# - Includes session timeout and cleanup
+# - Better for stateful workloads with long-running sessions

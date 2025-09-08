@@ -18,6 +18,7 @@ import os
 import queue
 import random
 import threading
+import time
 from abc import ABC, abstractmethod
 from concurrent.futures import Future
 from typing import Any, Optional
@@ -48,7 +49,7 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 class AsyncLLMServerManager:
     """
     A class to manage multiple OpenAI compatible LLM servers. This class provides
-    - Load balance: least requests load balancing
+    - Load balance: configurable between least requests and least active sessions load balancing
     - Sticky session: send multi-turn chat completions to same server for automatic prefix caching
     """
 
@@ -64,23 +65,156 @@ class AsyncLLMServerManager:
         self.server_handles = server_handles
         random.shuffle(self.server_handles)
 
-        # Least requests load balancing
+        # Load balancing strategy: 'requests' or 'sessions'
+        self.load_balancing_strategy = getattr(config, 'load_balancing_strategy', 'requests')
+        
+        # For both strategies: track server metrics
+        self.server_active_sessions = {hash(server): 0 for server in server_handles}
+        self.server_handles_map = {hash(server): server for server in server_handles}
+        
+        # Heap for load balancing: [metric_value, (server_hash, server)]
+        # For 'requests': metric_value = total request count
+        # For 'sessions': metric_value = active session count
         self.weighted_serveres = [[0, (hash(server), server)] for server in server_handles]
         heapq.heapify(self.weighted_serveres)
 
         # LRU cache to map request_id to server
         self.request_id_to_server = LRUCache(maxsize=max_cache_size)
+        
+        # Track active sessions: request_id -> (server_hash, start_time)
+        # Only used when load_balancing_strategy == 'sessions'
+        self.active_sessions = {}
+        
+        # Lock for thread-safe operations
+        self._lock = threading.Lock()
+        
+        # Session timeout (in seconds) - sessions older than this are considered inactive
+        # Only used when load_balancing_strategy == 'sessions'
+        self.session_timeout = getattr(config, 'session_timeout', 300)  # 5 minutes default
+        
+        # Start background cleanup task (only for session-based load balancing)
+        self._cleanup_task = None
+        if self.load_balancing_strategy == 'sessions':
+            self._start_cleanup_task()
+
+    def _start_cleanup_task(self):
+        """Start background task for periodic session cleanup."""
+        if self._cleanup_task is None:
+            self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
+
+    async def _periodic_cleanup(self):
+        """Periodic cleanup of expired sessions."""
+        while True:
+            try:
+                await asyncio.sleep(60)  # Clean up every minute
+                with self._lock:
+                    self._cleanup_expired_sessions()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"Error during periodic session cleanup: {e}")
+
+    def shutdown(self):
+        """Shutdown the server manager and cleanup resources."""
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
+
+    def _cleanup_expired_sessions(self):
+        """Clean up expired sessions and update server active session counts."""
+        current_time = time.time()
+        expired_sessions = []
+        
+        for request_id, (server_hash, start_time) in self.active_sessions.items():
+            if current_time - start_time > self.session_timeout:
+                expired_sessions.append(request_id)
+        
+        # Remove expired sessions
+        for request_id in expired_sessions:
+            server_hash, _ = self.active_sessions.pop(request_id)
+            self.server_active_sessions[server_hash] -= 1
+            
+            # Remove from LRU cache if exists
+            if request_id in self.request_id_to_server:
+                del self.request_id_to_server[request_id]
+        
+        # Rebuild heap with updated session counts
+        self.weighted_serveres = [[self.server_active_sessions[hash(server)], (hash(server), server)] 
+                                 for server in self.server_handles]
+        heapq.heapify(self.weighted_serveres)
 
     def _choose_server(self, request_id: str) -> ray.actor.ActorHandle:
-        # TODO: implement server pressure awareness load balancing
-        if request_id in self.request_id_to_server:
-            return self.request_id_to_server[request_id]
+        """Choose server based on configured load balancing strategy with sticky sessions."""
+        with self._lock:
+            # Clean up expired sessions periodically (only for session-based strategy)
+            if self.load_balancing_strategy == 'sessions':
+                self._cleanup_expired_sessions()
+            
+            # Check for sticky session first
+            if request_id in self.request_id_to_server:
+                server = self.request_id_to_server[request_id]
+                # Update session activity (only for session-based strategy)
+                if self.load_balancing_strategy == 'sessions' and request_id in self.active_sessions:
+                    self.active_sessions[request_id] = (hash(server), time.time())
+                return server
 
-        server = self.weighted_serveres[0][1][1]
-        self.weighted_serveres[0][0] += 1
-        heapq.heapreplace(self.weighted_serveres, self.weighted_serveres[0])
-        self.request_id_to_server[request_id] = server
-        return server
+            # Choose server with least metric value (requests or sessions)
+            server = self.weighted_serveres[0][1][1]
+            server_hash = hash(server)
+            
+            if self.load_balancing_strategy == 'requests':
+                # Original least requests load balancing
+                self.server_active_sessions[server_hash] += 1
+                # Update heap
+                self.weighted_serveres[0][0] += 1
+                heapq.heapreplace(self.weighted_serveres, self.weighted_serveres[0])
+                
+            elif self.load_balancing_strategy == 'sessions':
+                # New least active sessions load balancing
+                self.server_active_sessions[server_hash] += 1
+                self.active_sessions[request_id] = (server_hash, time.time())
+                # Update heap
+                self.weighted_serveres[0][0] += 1
+                heapq.heapreplace(self.weighted_serveres, self.weighted_serveres[0])
+            
+            # Cache the mapping for sticky sessions
+            self.request_id_to_server[request_id] = server
+            
+            return server
+
+    def _end_session(self, request_id: str):
+        """Mark a session as ended and update server active session count."""
+        with self._lock:
+            # Only process session ending for session-based load balancing
+            if self.load_balancing_strategy == 'sessions' and request_id in self.active_sessions:
+                server_hash, _ = self.active_sessions.pop(request_id)
+                self.server_active_sessions[server_hash] -= 1
+                
+                # Remove from LRU cache
+                if request_id in self.request_id_to_server:
+                    del self.request_id_to_server[request_id]
+                
+                # Rebuild heap with updated session counts
+                self.weighted_serveres = [[self.server_active_sessions[hash(server)], (hash(server), server)] 
+                                         for server in self.server_handles]
+                heapq.heapify(self.weighted_serveres)
+
+    def get_server_stats(self) -> dict:
+        """Get current server statistics based on load balancing strategy."""
+        with self._lock:
+            if self.load_balancing_strategy == 'sessions':
+                self._cleanup_expired_sessions()
+                return {
+                    'load_balancing_strategy': self.load_balancing_strategy,
+                    'server_active_sessions': dict(self.server_active_sessions),
+                    'total_active_sessions': sum(self.server_active_sessions.values()),
+                    'active_sessions_detail': dict(self.active_sessions)
+                }
+            else:  # requests strategy
+                return {
+                    'load_balancing_strategy': self.load_balancing_strategy,
+                    'server_total_requests': dict(self.server_active_sessions),
+                    'total_requests': sum(self.server_active_sessions.values())
+                }
 
     @rollout_trace_op
     async def generate(
@@ -90,6 +224,7 @@ class AsyncLLMServerManager:
         prompt_ids: list[int],
         sampling_params: dict[str, Any],
         image_data: Optional[list[Any]] = None,
+        end_session: bool = False,
     ) -> TokenOutput:
         """Generate tokens from prompt ids.
 
@@ -97,18 +232,25 @@ class AsyncLLMServerManager:
             request_id (str): request id for sticky session.
             prompt_ids (List[int]): List of prompt token ids.
             sampling_params (Dict[str, Any]): Sampling parameters for the chat completion.
+            image_data (Optional[list[Any]]): Optional image data for multi-modal models.
+            end_session (bool): Whether to end the session after this request.
 
         Returns:
             TokenOutput: token output
         """
         server = self._choose_server(request_id)
-        output = await server.generate.remote(
-            request_id=request_id,
-            prompt_ids=prompt_ids,
-            sampling_params=sampling_params,
-            image_data=image_data,
-        )
-        return output
+        try:
+            output = await server.generate.remote(
+                request_id=request_id,
+                prompt_ids=prompt_ids,
+                sampling_params=sampling_params,
+                image_data=image_data,
+            )
+            return output
+        finally:
+            # End session if requested (only for session-based load balancing)
+            if end_session and self.load_balancing_strategy == 'sessions':
+                self._end_session(request_id)
 
 
 class AgentLoopMetrics(BaseModel):
