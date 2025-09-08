@@ -519,7 +519,7 @@ class RayPPOTrainer:
 
             # repeat test batch
             test_batch = test_batch.repeat(
-                repeat_times=self.config.actor_rollout_ref.rollout.val_kwargs.n, interleave=True
+                repeat_times=self.config.actor_rollout_ref.rollout.val_kwargs.n, interleave=getattr(self.config.actor_rollout_ref.rollout, "interleave", True)
             )
 
             # we only do validation on rule-based rm
@@ -976,7 +976,7 @@ class RayPPOTrainer:
 
                 # pass global_steps to trace
                 gen_batch.meta_info["global_steps"] = self.global_steps
-                gen_batch = gen_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
+                gen_batch = gen_batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=getattr(self.config.actor_rollout_ref.rollout, "interleave", True))
 
                 is_last_step = self.global_steps >= self.total_training_steps
 
@@ -1012,7 +1012,7 @@ class RayPPOTrainer:
                             del gen_baseline_batch, gen_baseline_output
 
                     # repeat to align with repeated responses in rollout
-                    batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
+                    batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=getattr(self.config.actor_rollout_ref.rollout, "interleave", True))
                     batch = batch.union(gen_batch_output)
 
                     if "response_mask" not in batch.batch.keys():
