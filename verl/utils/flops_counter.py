@@ -88,7 +88,7 @@ def get_device_flops(unit="T"):
     elif "A40" in device_name:
         flops = 149.7e12
     elif "L20" in device_name:
-        flops = 119.5e12
+        flops = 989e12
     elif "H20" in device_name:
         flops = 148e12
     elif "910B" in device_name:
