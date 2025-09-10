@@ -380,12 +380,11 @@ def calc_maj_val(data: list[dict[str, Any]], vote_key: str, val_key: str) -> flo
     return maj_val
 
 
-def _process_uid_var2metrics(args: tuple[str, dict[str, list[Any]], int]) -> tuple[str, dict[str, dict[str, float]]]:
+def _process_uid_var2metrics(uid: str, var2vals: dict[str, list[Any]], seed: int) -> tuple[str, dict[str, dict[str, float]]]:
     """
-    Compute metrics for a single UID. This wraps the original inner logic unchanged,
-    so it can be executed in a ProcessPool.
+    Compute metrics for a single UID. Modified to accept three separate arguments
+    to match the argument passing in pool.schedule.
     """
-    uid, var2vals, seed = args
     uid_var2metric: dict[str, dict[str, float]] = defaultdict(dict)
     for var_name, var_vals in var2vals.items():
         if isinstance(var_vals[0], str):
