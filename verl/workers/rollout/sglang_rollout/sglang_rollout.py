@@ -442,7 +442,7 @@ class SGLangRollout(BaseRollout):
                 "max_running_requests": max_running_requests,
                 # NOTE(linjunrong): add rank to prevent SGLang generate same port inside PortArgs.init_new
                 # when random.seed is being set during training
-                "port": 30000 + rank * 16,
+                "port": 30000 + (rank+8) * 8,
                 # NOTE(Chenyang): if you want to debug the SGLang engine output
                 # please set the following parameters
                 # Otherwise, it will make the engine run too slow
