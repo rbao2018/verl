@@ -163,5 +163,5 @@ class RolloutConfig(BaseConfig):
     layer_name_map: dict = field(default_factory=dict)
 
     sglang_engine_mode: str = "local"
-
+    sglang_rollout_mode: str = "local"
     limit_images: Optional[int] = None
